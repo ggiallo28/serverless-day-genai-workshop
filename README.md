@@ -1,0 +1,1 @@
+# serverless-day-genai-workshop
