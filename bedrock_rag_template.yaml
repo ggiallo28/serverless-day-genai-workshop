@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Resources for Q&A Application using Amazon Bedrock - Retrieve API
+Parameters:
+  UUID:
+    Type: String
+    Description: Unique identifier to ensure resource name uniqueness.
+  CreateKnowledgeBase:
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    Description: Set to true to create the Bedrock Knowledge Base after ensuring the OpenSearch index exists.
+  CallerIdentity:
+    Type: String
+Conditions:
+  ShouldCreateKnowledgeBase: !Equals
+    - !Ref CreateKnowledgeBase
+    - true
+Resources:
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub kb-${UUID}-${AWS::Region}
+      AccessControl: Private
+      
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}
+              - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}/*
+  BedrockExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub agent-role-${UUID}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}
+                  - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}/*
+        - PolicyName: OpenSearchAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aoss:*
+                Resource: '*'
+        - PolicyName: BedrockAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+                
+  EncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Join
+        - '-'
+        - - os
+          - !Ref UUID
+          - encryption-policy
+      Type: encryption
+      Description: Encryption policy for AOSS collection
+      Policy: !Sub |
+        {
+          "Rules": [
+            {
+              "ResourceType": "collection",
+              "Resource": [
+                "collection/kb-collection-${UUID}"
+              ]
+            }
+          ],
+          "AWSOwnedKey": true
+        }
+  NetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Join
+        - '-'
+        - - os
+          - !Ref UUID
+          - network-policy
+      Type: network
+      Description: Network policy for AOSS collection
+      Policy: !Sub |
+        [{
+          "Rules": [
+            {
+              "ResourceType": "dashboard",
+              "Resource": [
+                "collection/kb-collection-${UUID}"
+              ]
+            },
+            {
+              "ResourceType": "collection",
+              "Resource": [
+                "collection/kb-collection-${UUID}"
+              ]
+            }
+          ],
+          "AllowFromPublic": true
+        }]
+  DataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub os-${UUID}-data-access-policy
+      Type: data
+      Description: Access policy for AOSS collection
+      Policy: !Sub |
+        [{
+          "Rules": [
+            {
+              "ResourceType": "collection",
+              "Resource": [
+                "collection/kb-collection-${UUID}"
+              ],
+              "Permission": [
+                "aoss:CreateCollectionItems",
+                "aoss:DeleteCollectionItems",
+                "aoss:UpdateCollectionItems",
+                "aoss:DescribeCollectionItems"
+              ]
+            },
+            {
+              "ResourceType": "index",
+              "Resource": [
+                "index/kb-collection-${UUID}/*"
+              ],
+              "Permission": [
+                "aoss:CreateIndex",
+                "aoss:DeleteIndex",
+                "aoss:UpdateIndex",
+                "aoss:DescribeIndex",
+                "aoss:ReadDocument",
+                "aoss:WriteDocument"
+              ]
+            }
+          ],
+          "Principal": [
+            "${BedrockExecutionRole.Arn}",
+            "${CallerIdentity}"
+          ]
+        }]
+        
+  OpenSearchServerlessCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - EncryptionPolicy
+      - NetworkPolicy
+      - DataAccessPolicy
+    Properties:
+      Name: !Sub kb-collection-${UUID}
+      Type: VECTORSEARCH
+      StandbyReplicas: DISABLED
+      
+  BedrockKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Condition: ShouldCreateKnowledgeBase
+    Properties:
+      Name: !Sub kb-kb-${UUID}
+      Description: Knowledge Base for Q&A Application using Bedrock
+      RoleArn: !GetAtt BedrockExecutionRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: "VECTOR"
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0"
+          EmbeddingModelConfiguration: 
+            BedrockEmbeddingModelConfiguration: 
+              Dimensions: 256
+      StorageConfiguration:
+        Type: "OPENSEARCH_SERVERLESS"
+        OpensearchServerlessConfiguration:
+          CollectionArn: !Sub "arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/${OpenSearchServerlessCollection.Id}"
+          VectorIndexName: !Sub kb-index-${UUID}
+          FieldMapping:
+            VectorField: vector
+            TextField: AMAZON_BEDROCK_TEXT_CHUNK
+            MetadataField: AMAZON_BEDROCK_METADATA
+            
+  BedrockDataSource:
+    Type: AWS::Bedrock::DataSource
+    Condition: ShouldCreateKnowledgeBase
+    Properties:
+      Name: !Sub kb-data-${UUID}
+      Description: Data Source for Bedrock Q&A Application
+      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt S3Bucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 512
+            OverlapPercentage: 20
+Outputs:
+  S3BucketName:
+    Value: !Ref S3Bucket
+    Description: Name of the S3 bucket for document storage.
+  BedrockExecutionRoleArn:
+    Value: !GetAtt BedrockExecutionRole.Arn
+    Description: ARN of the IAM role for Bedrock execution.
+  OpenSearchServerlessCollectionEndpoint:
+    Value: !GetAtt OpenSearchServerlessCollection.CollectionEndpoint
+    Description: Endpoint of the OpenSearch Serverless collection.
+  OpenSearchServerlessCollectionArn:
+    Value: !GetAtt OpenSearchServerlessCollection.Arn
+    Description: ARN of the OpenSearch Serverless collection.
+  BedrockKnowledgeBaseId:
+    Condition: ShouldCreateKnowledgeBase
+    Value: !Ref BedrockKnowledgeBase
+    Description: ID of the Bedrock Knowledge Base.
+  BedrockDataSourceId:
+    Condition: ShouldCreateKnowledgeBase
+    Value: !Ref BedrockDataSource
+    Description: ID of the Bedrock Data Source.
