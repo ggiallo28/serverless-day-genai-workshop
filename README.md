@@ -58,42 +58,11 @@ guaranteed to run on every account.
 
 ## Repository structure
 
-Every notebook only ever needs `resources/src` on its `sys.path` — you never have to open
-that folder yourself to run the workshop. Run `make tree` any time you want to look inside
-it without hunting for it manually.
-
-```
-.
-├── 0_bedrock_basics.ipynb ... 6_agentcore_advanced.ipynb   # the workshop notebooks
-├── Makefile                       # make help for all commands (make tree browses resources/ for you)
-├── README.md
-├── requirements.in / requirements.txt
-└── resources/                     # everything the notebooks load, deploy, or import
-    ├── src/                       # shared Python helpers imported by the notebooks
-    │   ├── utils.py
-    │   ├── cloudformation_utils.py
-    │   ├── langchain_utils.py
-    │   └── opensearch_utils.py
-    ├── infra/                     # CloudFormation templates
-    │   ├── bedrock_rag_template.yaml            # notebook 2, OpenSearch Serverless variant
-    │   ├── bedrock_rag_s3vectors_template.yaml  # notebook 2, S3 Vectors variant (default)
-    │   ├── agentcore_harness_role_template.yaml # notebook 4, harness execution role
-    │   ├── sagemaker_studio_init_template.yaml  # `make studio-init`
-    │   └── legacy/bedrock_agent_template.yaml   # Bedrock Agents Classic template
-    ├── lambdas/                   # Lambda function code for Gateway tools
-    │   ├── calc/
-    │   ├── restaurant/
-    │   └── restaurant_data/
-    ├── data/                      # Knowledge Base source documents
-    │   ├── financials/
-    │   └── restaurant/
-    ├── assets/images/             # diagrams referenced by the notebooks
-    ├── config/
-    │   ├── chain_config.json
-    │   └── skills/booking-ops/SKILL.md   # AgentCore Skill used in notebooks 4/6
-    ├── scripts/cleanup_workshop.py       # `make teardown`
-    └── legacy/                           # Bedrock Agents Classic notebooks
-```
+Notebooks, `Makefile`, `README.md`, and `requirements.in`/`requirements.txt` live at the repo
+root. Everything else the notebooks load, deploy, or import — shared Python helpers, CFN
+templates, Lambda code, Knowledge Base source documents, diagrams, config, and the retired
+Bedrock Agents Classic notebooks — lives under [`resources/`](resources/README.md). You never
+have to open that folder to run the workshop; run `make tree` if you want to look inside it.
 
 ## Cleaning up
 
