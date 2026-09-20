@@ -2,10 +2,19 @@ STUDIO_STACK_NAME ?= genai-workshop-studio
 STUDIO_REGION ?= us-east-1
 
 .DEFAULT_GOAL := help
-.PHONY: help install lock env jupyter validate clean studio-init studio-url studio-destroy teardown teardown-dry-run
+.PHONY: help install lock env jupyter validate clean tree studio-init studio-url studio-destroy teardown teardown-dry-run
 
 help: ## Show this list of commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-10s %s\n", $$1, $$2}'
+
+tree: ## Show what's inside resources/ so you never have to dig for it by hand
+	@echo "Notebooks (repo root): 0_bedrock_basics.ipynb ... 6_agentcore_advanced.ipynb"
+	@echo ""
+	@if command -v tree >/dev/null 2>&1; then \
+		tree -I '__pycache__|*.zip' resources; \
+	else \
+		find resources -not -path '*__pycache__*' -not -name '*.zip' | sort | sed 's|[^/]*/|  |g'; \
+	fi
 
 install: ## Install/refresh all Python dependencies from requirements.txt
 	uv pip install --no-build-isolation --force-reinstall -r requirements.txt
@@ -62,7 +71,7 @@ studio-init: ## Deploy a ready-to-go SageMaker Studio (JupyterLab) for this work
 	fi; \
 	echo "Using VPC $$vpc_id, subnets $$subnet_ids"; \
 	aws cloudformation deploy \
-		--template-file infra/sagemaker_studio_init_template.yaml \
+		--template-file resources/infra/sagemaker_studio_init_template.yaml \
 		--stack-name $(STUDIO_STACK_NAME) \
 		--region $(STUDIO_REGION) \
 		--capabilities CAPABILITY_NAMED_IAM \
@@ -84,7 +93,7 @@ studio-destroy: ## Tear down the SageMaker Studio environment (destructive -- co
 	fi
 
 teardown-dry-run: ## Show what workshop AWS resources exist right now, without deleting anything
-	python3 scripts/cleanup_workshop.py --dry-run
+	python3 resources/scripts/cleanup_workshop.py --dry-run
 
 teardown: ## Find and delete every AWS resource created by running notebooks 2/4/5 (destructive -- asks before deleting)
-	python3 scripts/cleanup_workshop.py
+	python3 resources/scripts/cleanup_workshop.py

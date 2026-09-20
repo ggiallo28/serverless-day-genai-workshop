@@ -19,7 +19,7 @@ booking requests.
 make studio-init
 ```
 
-This deploys `infra/sagemaker_studio_init_template.yaml`: a SageMaker Studio domain, user
+This deploys `resources/infra/sagemaker_studio_init_template.yaml`: a SageMaker Studio domain, user
 profile, and JupyterLab space, with an execution role that already has every AWS permission
 the notebooks need. Open the printed console URL, launch the JupyterLab space, and start at
 `0_bedrock_basics.ipynb` — no local Python setup, no `.env` file to fill in by hand (Studio's
@@ -41,9 +41,9 @@ Run `make help` to see every available command.
 | # | Notebook | Covers | When |
 |---|---|---|---|
 | 0 | `0_bedrock_basics.ipynb` | `boto3` setup, the current serverless model catalog (Amazon Nova, Claude 4.x via cross-Region inference profiles, Mistral) | Pre-work |
-| 1 | `1_text_generation.ipynb` | Prompt engineering: summarization, Q&A, entity extraction | Pre-work |
-| 2 | `2_bedrock_kb.ipynb` | Knowledge Bases / RAG, deployed via CloudFormation, with a choice of S3 Vectors (default, low-cost) or OpenSearch Serverless | Pre-work (ideally) |
-| 3 | `3_text_generation_agents.ipynb` | LangChain: chains, memory, tools, a ReAct agent | Live |
+| 1 | `1_prompt_engineering.ipynb` | Prompt engineering: summarization, Q&A, entity extraction | Pre-work |
+| 2 | `2_knowledge_bases_rag.ipynb` | Knowledge Bases / RAG, deployed via CloudFormation, with a choice of S3 Vectors (default, low-cost) or OpenSearch Serverless | Pre-work (ideally) |
+| 3 | `3_langchain_agents.ipynb` | LangChain: chains, memory, tools, a ReAct agent | Live |
 | 4 | `4_agentcore_harness.ipynb` | Building the `restaurant_concierge` AgentCore Harness step by step: prompt-only → memory → inline tool → Gateway-backed Lambda tool → invoke overrides | Live |
 | 5 | `5_agentcore_multi_agent.ipynb` | Agent-as-tool: a second, specialist harness (`restaurant_events_specialist`) that the primary harness consults for large-party/private-event requests | Live, optional |
 | 6 | `6_agentcore_advanced.ipynb` | AgentCore platform deep dive: Gateway with semantic tool search, Memory strategies, Skills, Code Interpreter, Policy, Evaluations | Live, capstone |
@@ -51,42 +51,48 @@ Run `make help` to see every available command.
 Notebooks 0-1 (and ideally 2) are self-paced pre-work so live session time goes to notebooks
 3-6. Notebook 5 is optional and time-permitting — notebook 6 only requires notebook 4.
 
-`legacy/4_bedrock_agents.ipynb` and `legacy/5_multi_agents.ipynb` cover Amazon Bedrock Agents
-(Classic), kept for reference since Classic remains usable for AWS accounts allowlisted for
-it. They are not part of the main workshop flow and are not guaranteed to run on every
-account.
+`resources/legacy/4_bedrock_agents.ipynb` and `resources/legacy/5_multi_agents.ipynb` cover
+Amazon Bedrock Agents (Classic), kept for reference since Classic remains usable for AWS
+accounts allowlisted for it. They are not part of the main workshop flow and are not
+guaranteed to run on every account.
 
 ## Repository structure
+
+Every notebook only ever needs `resources/src` on its `sys.path` — you never have to open
+that folder yourself to run the workshop. Run `make tree` any time you want to look inside
+it without hunting for it manually.
 
 ```
 .
 ├── 0_bedrock_basics.ipynb ... 6_agentcore_advanced.ipynb   # the workshop notebooks
-├── Makefile                       # make help for all commands
+├── Makefile                       # make help for all commands (make tree browses resources/ for you)
+├── README.md
 ├── requirements.in / requirements.txt
-├── src/                           # shared Python helpers imported by the notebooks
-│   ├── utils.py
-│   ├── cloudformation_utils.py
-│   ├── langchain_utils.py
-│   └── opensearch_utils.py
-├── infra/                         # CloudFormation templates
-│   ├── bedrock_rag_template.yaml            # notebook 2, OpenSearch Serverless variant
-│   ├── bedrock_rag_s3vectors_template.yaml  # notebook 2, S3 Vectors variant (default)
-│   ├── agentcore_harness_role_template.yaml # notebook 4, harness execution role
-│   ├── sagemaker_studio_init_template.yaml  # `make studio-init`
-│   └── legacy/bedrock_agent_template.yaml   # Bedrock Agents Classic template
-├── lambdas/                       # Lambda function code for Gateway tools
-│   ├── calc/
-│   ├── restaurant/
-│   └── restaurant_data/
-├── data/                          # Knowledge Base source documents
-│   ├── financials/
-│   └── restaurant/
-├── assets/images/                 # diagrams referenced by the notebooks
-├── config/
-│   ├── chain_config.json
-│   └── skills/booking-ops/SKILL.md   # AgentCore Skill used in notebooks 4/6
-├── scripts/cleanup_workshop.py    # `make teardown`
-└── legacy/                        # Bedrock Agents Classic notebooks
+└── resources/                     # everything the notebooks load, deploy, or import
+    ├── src/                       # shared Python helpers imported by the notebooks
+    │   ├── utils.py
+    │   ├── cloudformation_utils.py
+    │   ├── langchain_utils.py
+    │   └── opensearch_utils.py
+    ├── infra/                     # CloudFormation templates
+    │   ├── bedrock_rag_template.yaml            # notebook 2, OpenSearch Serverless variant
+    │   ├── bedrock_rag_s3vectors_template.yaml  # notebook 2, S3 Vectors variant (default)
+    │   ├── agentcore_harness_role_template.yaml # notebook 4, harness execution role
+    │   ├── sagemaker_studio_init_template.yaml  # `make studio-init`
+    │   └── legacy/bedrock_agent_template.yaml   # Bedrock Agents Classic template
+    ├── lambdas/                   # Lambda function code for Gateway tools
+    │   ├── calc/
+    │   ├── restaurant/
+    │   └── restaurant_data/
+    ├── data/                      # Knowledge Base source documents
+    │   ├── financials/
+    │   └── restaurant/
+    ├── assets/images/             # diagrams referenced by the notebooks
+    ├── config/
+    │   ├── chain_config.json
+    │   └── skills/booking-ops/SKILL.md   # AgentCore Skill used in notebooks 4/6
+    ├── scripts/cleanup_workshop.py       # `make teardown`
+    └── legacy/                           # Bedrock Agents Classic notebooks
 ```
 
 ## Cleaning up

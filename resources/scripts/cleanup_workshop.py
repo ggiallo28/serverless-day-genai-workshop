@@ -129,7 +129,7 @@ def main():
     parser.add_argument("--region", default=REGION, help=f"AWS region (default: {REGION})")
     args = parser.parse_args()
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     cfn = boto3.client("cloudformation", region_name=args.region)
 
     print(f"Scanning region {args.region} for workshop resources...\n")
