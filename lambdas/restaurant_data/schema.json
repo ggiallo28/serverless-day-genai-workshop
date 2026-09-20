@@ -1,0 +1,16 @@
+[
+    {
+        "name": "get_restaurant_data",
+        "description": "Return official restaurant data: menu, today's specials, opening hours, and FAQ. Use this instead of guessing menu items, hours, or availability.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Optional topic to focus on: menu, hours, faq, or all."
+                }
+            },
+            "required": []
+        }
+    }
+]

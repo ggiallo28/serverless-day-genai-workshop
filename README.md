@@ -1,172 +1,130 @@
-# Amazon Bedrock RAG and Agent Application
+# Amazon Bedrock GenAI Workshop
 
-> **⚠️ Disclaimer: This workshop is not free and may incur **AWS usage costs**. The estimated cost of completing this workshop is approximately **$10 USD**. Please monitor your AWS account billing dashboard to track expenses and avoid unexpected charges.** 
+A hands-on, notebook-driven workshop covering Amazon Bedrock end to end: model basics and
+prompt engineering, Retrieval-Augmented Generation (RAG), LangChain, and building agents on
+**Amazon Bedrock AgentCore**. The running example throughout notebooks 2 and 4-6 is a
+restaurant concierge ("The Bedrock Bistro") that answers menu/hours questions and takes
+booking requests.
 
----
+> ⚠️ **This workshop is not free.** Deploying the CloudFormation stacks, Lambda functions,
+> and AgentCore harnesses in notebooks 2 and 4-6 incurs real AWS usage costs. Run
+> `make teardown` (and `make studio-destroy` if you used `make studio-init`) when you're
+> done — see [Cleaning up](#cleaning-up) below.
 
-## Repository Overview
+## Quickstart
 
-This repository demonstrates the implementation of a Retrieval-Augmented Generation (RAG) system and a Bedrock Agent for natural language processing and automation. The application utilizes **Amazon Bedrock**, **OpenSearch Serverless**, and **AWS Lambda** to deliver scalable solutions for question answering and restaurant booking workflows.
+### Recommended: SageMaker Studio (lowest setup friction)
 
----
+```bash
+make studio-init
+```
 
-## Repository Structure
+This deploys `infra/sagemaker_studio_init_template.yaml`: a SageMaker Studio domain, user
+profile, and JupyterLab space, with an execution role that already has every AWS permission
+the notebooks need. Open the printed console URL, launch the JupyterLab space, and start at
+`0_bedrock_basics.ipynb` — no local Python setup, no `.env` file to fill in by hand (Studio's
+execution role supplies credentials automatically).
+
+### Alternative: local Jupyter
+
+```bash
+make install   # installs everything in requirements.txt
+make env       # creates a blank .env for your AWS credentials
+make jupyter   # launches Jupyter Lab
+```
+
+Fill in `.env` with your AWS access key/secret/session token before running notebook 0.
+Run `make help` to see every available command.
+
+## Notebooks
+
+| # | Notebook | Covers | When |
+|---|---|---|---|
+| 0 | `0_bedrock_basics.ipynb` | `boto3` setup, the current serverless model catalog (Amazon Nova, Claude 4.x via cross-Region inference profiles, Mistral) | Pre-work |
+| 1 | `1_text_generation.ipynb` | Prompt engineering: summarization, Q&A, entity extraction | Pre-work |
+| 2 | `2_bedrock_kb.ipynb` | Knowledge Bases / RAG, deployed via CloudFormation, with a choice of S3 Vectors (default, low-cost) or OpenSearch Serverless | Pre-work (ideally) |
+| 3 | `3_text_generation_agents.ipynb` | LangChain: chains, memory, tools, a ReAct agent | Live |
+| 4 | `4_agentcore_harness.ipynb` | Building the `restaurant_concierge` AgentCore Harness step by step: prompt-only → memory → inline tool → Gateway-backed Lambda tool → invoke overrides | Live |
+| 5 | `5_agentcore_multi_agent.ipynb` | Agent-as-tool: a second, specialist harness (`restaurant_events_specialist`) that the primary harness consults for large-party/private-event requests | Live, optional |
+| 6 | `6_agentcore_advanced.ipynb` | AgentCore platform deep dive: Gateway with semantic tool search, Memory strategies, Skills, Code Interpreter, Policy, Evaluations | Live, capstone |
+
+Notebooks 0-1 (and ideally 2) are self-paced pre-work so live session time goes to notebooks
+3-6. Notebook 5 is optional and time-permitting — notebook 6 only requires notebook 4.
+
+`legacy/4_bedrock_agents.ipynb` and `legacy/5_multi_agents.ipynb` cover Amazon Bedrock Agents
+(Classic), kept for reference since Classic remains usable for AWS accounts allowlisted for
+it. They are not part of the main workshop flow and are not guaranteed to run on every
+account.
+
+## Repository structure
 
 ```
 .
-├── 0_bedrock_basics.ipynb       # Introduction to Bedrock fundamentals
-├── 1_text_generation.ipynb      # Text generation with Bedrock models
-├── 2_bedrock_kb.ipynb           # Knowledge base integration
-├── 3_lanhchain_agents.ipynb     # LLM agents and tool usage
-├── 4_bedrock_agents.ipynb       # Advanced Bedrock agent workflows
-├── 5_multi_agents.ipynb         # Multi-agent system implementation
-├── bedrock_agent_template.yaml  # CloudFormation template for Bedrock Agent
-├── bedrock_rag_template.yaml    # CloudFormation template for RAG system
-├── chain_config.json            # Configuration for multi-step prompts
-├── cloudformation_utils.py      # CloudFormation stack utilities
-├── langchain_utils.py           # LangChain tool and agent utilities
-├── opensearch_utils.py          # OpenSearch Serverless utilities
-├── requirements.txt             # Python dependencies
-├── images/                      # Image assets
-├── kb_financials/               # Knowledge base for financial domain
-├── kb_restaurant/               # Knowledge base for restaurant domain
-└── README.md                    # Project documentation
+├── 0_bedrock_basics.ipynb ... 6_agentcore_advanced.ipynb   # the workshop notebooks
+├── Makefile                       # make help for all commands
+├── requirements.in / requirements.txt
+├── src/                           # shared Python helpers imported by the notebooks
+│   ├── utils.py
+│   ├── cloudformation_utils.py
+│   ├── langchain_utils.py
+│   └── opensearch_utils.py
+├── infra/                         # CloudFormation templates
+│   ├── bedrock_rag_template.yaml            # notebook 2, OpenSearch Serverless variant
+│   ├── bedrock_rag_s3vectors_template.yaml  # notebook 2, S3 Vectors variant (default)
+│   ├── agentcore_harness_role_template.yaml # notebook 4, harness execution role
+│   ├── sagemaker_studio_init_template.yaml  # `make studio-init`
+│   └── legacy/bedrock_agent_template.yaml   # Bedrock Agents Classic template
+├── lambdas/                       # Lambda function code for Gateway tools
+│   ├── calc/
+│   ├── restaurant/
+│   └── restaurant_data/
+├── data/                          # Knowledge Base source documents
+│   ├── financials/
+│   └── restaurant/
+├── assets/images/                 # diagrams referenced by the notebooks
+├── config/
+│   ├── chain_config.json
+│   └── skills/booking-ops/SKILL.md   # AgentCore Skill used in notebooks 4/6
+├── scripts/cleanup_workshop.py    # `make teardown`
+└── legacy/                        # Bedrock Agents Classic notebooks
 ```
 
----
+## Cleaning up
 
-## Overview
+Two separate teardown paths, since resources come from two different places:
 
-The project is divided into two primary components:
+```bash
+make teardown-dry-run   # see what workshop AWS resources currently exist (free, read-only)
+make teardown           # delete them (asks for confirmation first)
+make studio-destroy     # separately tears down the SageMaker Studio environment, if you used studio-init
+```
 
-### 1. Retrieval-Augmented Generation (RAG) System
-Enables efficient knowledge retrieval for user queries by combining Bedrock's capabilities with OpenSearch Serverless.
+`make teardown` covers the AgentCore CLI projects from notebooks 4/5 (harness, memory,
+gateway) and the CloudFormation stacks from notebooks 2 and 4 (and the legacy notebook 4, if
+you ran it). It does **not** cover the Gateway/Lambda/IAM/Cognito demo resources that
+notebook 6 creates directly via `boto3` — run that notebook's own **Cleanup** section (near
+the end) for those.
 
-### 2. Bedrock Agent for Restaurant Bookings
-Automates restaurant booking tasks, integrating Bedrock with AWS Lambda and DynamoDB for workflow management.
+## Dependencies
 
----
+The workshop leads with the AgentCore Harness: model, tools, memory, and skills are declared
+as configuration. `langchain-classic` provides the chains/prompts/output-parser APIs notebook
+3 uses.
 
-## Data Flow
-
-The system follows this general workflow:
-
-1. **Document Upload**: Files are uploaded to an S3 bucket.
-2. **Knowledge Base Ingestion**: Bedrock ingests documents from S3 and indexes them in OpenSearch Serverless.
-3. **Query Processing**: User queries are handled by Bedrock Retrieve API or the Bedrock Agent.
-4. **Restaurant Booking**: Bedrock Agent triggers AWS Lambda for booking operations, interacting with DynamoDB.
-
----
-
-## Infrastructure Components
-
-### RAG System (`bedrock_rag_template.yaml`)
-- **S3 Bucket**: Stores documents for the knowledge base.
-- **IAM Role**: Provides permissions for Bedrock and OpenSearch access.
-- **OpenSearch Serverless Collection**: Supports vector storage and search.
-- **Bedrock Knowledge Base**: Manages and searches documents.
-- **Bedrock Data Source**: Ingests documents into the knowledge base.
-
-### Bedrock Agent (`bedrock_agent_template.yaml`)
-- **DynamoDB Table**: Stores restaurant booking data.
-- **IAM Policy**: Grants Bedrock Agent necessary permissions.
-- **Lambda Function**: Executes booking operations (create, retrieve, delete).
-- **Bedrock Agent**: Orchestrates booking workflows.
-
----
-
-## Getting Started
-
-### Prerequisites
-1. AWS CLI configured with necessary permissions.
-2. Python 3.8+ installed on your system.
-3. Required Python packages installed.
-
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone <repository_url>
-   cd <repository_directory>
-   ```
-
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Configure AWS credentials:
-   - Create a `.env` file with your AWS credentials:
-     ```
-     AWS_ACCESS_KEY_ID=<your_access_key>
-     AWS_SECRET_ACCESS_KEY=<your_secret_key>
-     AWS_REGION=<your_region>
-     ```
-
----
-
-## Workshop Modules
-
-### 1. Bedrock Basics (`0_bedrock_basics.ipynb`)
-- Explore foundational Bedrock concepts.
-- Work with Amazon Bedrock models for text generation.
-
-### 2. Text Generation (`1_text_generation.ipynb`)
-- Use prompt engineering techniques for tasks like summarization, question answering, and entity extraction.
-- Compare various foundation models.
-
-### 3. Knowledge Base Integration (`2_bedrock_kb.ipynb`)
-- Build Retrieval-Augmented Generation (RAG) applications.
-- Configure OpenSearch Serverless and Bedrock Knowledge Bases.
-
-### 4. LangChain Agents (`3_lanhchain_agents.ipynb`)
-- Implement tools and reasoning frameworks.
-- Experiment with Chain of Thought (CoT) and Tree of Thoughts (ToT).
-
-### 5. Bedrock Agents (`4_bedrock_agents.ipynb`)
-- Develop Bedrock Agent workflows for automation.
-- Integrate memory and advanced tool usage.
-
-### 6. Multi-Agent Systems (`5_multi_agents.ipynb`)
-- Design and build collaborative agent workflows.
-- Implement real-world scenarios such as restaurant booking.
-
----
-
-## Troubleshooting
-
-### Common Issues
-1. **Stack Creation Failure**:
-   - Check AWS CloudFormation events for errors.
-   - Ensure unique S3 bucket names.
-   - Confirm IAM role permissions.
-
-2. **OpenSearch Connectivity**:
-   - Validate network and data access policies.
-   - Use `opensearch_utils.py` for connectivity checks.
-
-3. **Bedrock Agent Errors**:
-   - Verify Lambda function permissions.
-   - Check CloudWatch logs for error details.
-
-### Debugging Tips
-- Enable debug logging for Lambda functions by setting `LOG_LEVEL=DEBUG`.
-- Test OpenSearch connection with `opensearch_utils.py`.
-- Validate Bedrock API permissions:
-  ```bash
-  aws bedrock list-knowledge-bases --region <your_region>
-  ```
-
----
+Only models callable through plain serverless `InvokeModel`/`Converse` are used — nothing
+that requires a Bedrock Marketplace subscription, a SageMaker endpoint deployment, or
+Provisioned Throughput. Text generation runs on Amazon Nova and Anthropic Claude 4.x (via
+cross-Region inference profiles).
 
 ## Additional Resources
 
 For detailed documentation, refer to:
 
 - [Amazon Bedrock Documentation](https://aws.amazon.com/bedrock/)
+- [Amazon Bedrock AgentCore Documentation](https://aws.amazon.com/bedrock/agentcore/)
 - [AWS OpenSearch Documentation](https://docs.aws.amazon.com/opensearch/)
 - [AWS Lambda Documentation](https://aws.amazon.com/lambda/)
 
 ---
 
 Start exploring the repository to build robust AI/ML applications using Amazon Bedrock and AWS services! 🚀
-

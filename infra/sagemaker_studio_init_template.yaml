@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Workshop init step: provisions an Amazon SageMaker Studio domain + user profile + a
+  default JupyterLab space, with an execution role that already has every permission the
+  serverless-day-genai-workshop notebooks (0-6) need. Students click "Open Studio" and
+  start working immediately -- no local Python install, no manual .env credentials, no
+  IAM troubleshooting mid-workshop.
+
+  INTENTIONALLY BROAD PERMISSIONS: this role is scoped for a short-lived training/sandbox
+  AWS account, trading least-privilege for zero setup friction (per workshop feedback that
+  setup friction was the #1 pain point). Do not reuse this role/policy in a production
+  account without narrowing it.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >
+      VPC for the Studio domain. This renders as a dropdown of every VPC in this
+      account/region -- if deploying from the console, pick your DEFAULT VPC: open the
+      VPC console (Your VPCs) in another tab and look at the "Default VPC" column (Yes/No)
+      to see which ID it is. If you don't recognize any of them or the account has no
+      default VPC, any VPC with at least one public subnet works fine for this workshop.
+      Prefer not to choose at all? Run `make studio-init` instead of deploying this
+      template directly -- it auto-detects the default VPC/subnets for you via the CLI.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      One or more subnets inside the VPC selected above (public subnets are fine for this
+      workshop) -- also a dropdown, scoped to whichever VPC you pick once you select it.
+      Not sure which ones belong to your default VPC? `make studio-init` figures this out
+      automatically and skips this parameter entirely.
+
+  DomainName:
+    Type: String
+    Default: genai-workshop-studio
+    Description: Name for the SageMaker Studio domain.
+
+  UserProfileName:
+    Type: String
+    Default: workshop-student
+    Description: Name for the single Studio user profile this template creates.
+
+  InstanceType:
+    Type: String
+    Default: ml.t3.medium
+    Description: >
+      Default JupyterLab space instance type. ml.t3.medium is the cheapest option that
+      comfortably runs this workshop (all AWS inference happens server-side via Bedrock;
+      the notebook kernel itself does very little local compute).
+
+Resources:
+  StudioExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${DomainName}-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: genai-workshop-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Notebooks 0/1/3: model catalog + invocation (bedrock-runtime, bedrock-mantle)
+              - Sid: BedrockRuntimeAndCatalog
+                Effect: Allow
+                Action:
+                  - bedrock:ListFoundationModels
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetInferenceProfile
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource: "*"
+
+              # Notebook 2: Knowledge Bases, S3 Vectors / OpenSearch Serverless, ingestion
+              - Sid: BedrockKnowledgeBases
+                Effect: Allow
+                Action:
+                  - bedrock:CreateKnowledgeBase
+                  - bedrock:GetKnowledgeBase
+                  - bedrock:UpdateKnowledgeBase
+                  - bedrock:DeleteKnowledgeBase
+                  - bedrock:CreateDataSource
+                  - bedrock:GetDataSource
+                  - bedrock:StartIngestionJob
+                  - bedrock:GetIngestionJob
+                  - bedrock:ListIngestionJobs
+                  - bedrock:Retrieve
+                  - bedrock:RetrieveAndGenerate
+                Resource: "*"
+              - Sid: VectorStores
+                Effect: Allow
+                Action:
+                  - aoss:*
+                  - s3vectors:*
+                Resource: "*"
+
+              # Notebooks 4/5/6: AgentCore (harness, gateway, memory, code interpreter,
+              # identity, policy, evaluations -- one wildcard per service prefix rather
+              # than enumerating every action, since this is a fast-moving preview surface
+              - Sid: AgentCore
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:*
+                  - bedrock-agentcore-control:*
+                Resource: "*"
+
+              # Bedrock Agents Classic -- kept only so the retired legacy/ notebooks still
+              # run for anyone whose account is allowlisted; harmless no-op otherwise
+              - Sid: BedrockAgentsClassicLegacy
+                Effect: Allow
+                Action:
+                  - bedrock-agent:*
+                  - bedrock-agent-runtime:*
+                Resource: "*"
+
+              # Notebooks 4/5/6: Gateway targets and the workshop's own tool Lambdas
+              - Sid: LambdaForGatewayTools
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:GetFunction
+                  - lambda:DeleteFunction
+                  - lambda:InvokeFunction
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                Resource: "*"
+
+              # Every notebook's own CFN deploys (RAG/S3-Vectors/AgentCore-role templates)
+              - Sid: CloudFormationForWorkshopStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:ListStackResources
+                Resource: "*"
+
+              # CFN in this workshop creates roles for its own Lambdas/KB service role/
+              # harness execution role -- the deploying principal needs to create + pass
+              # those roles. Intentionally broad (see template description).
+              - Sid: IamForNestedWorkshopRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:PassRole
+                  - iam:TagRole
+                Resource: "*"
+
+              # Notebook 2 (KB data bucket), notebook 6 (skills upload to S3), and any
+              # CFN-created buckets
+              - Sid: S3ForDataAndSkills
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:PutBucketPolicy
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutBucketVersioning
+                Resource: "*"
+
+              # DynamoDB: kept for the legacy Bedrock Agent booking-table pattern some
+              # notebooks still reference for comparison
+              - Sid: DynamoDbLegacy
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: "*"
+
+              # Observability: notebook 6's `agentcore logs`/`agentcore traces`, and
+              # CloudWatch Logs for every Lambda this workshop creates
+              - Sid: Observability
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - xray:PutTraceSegments
+                  - xray:GetTraceSummaries
+                  - xray:BatchGetTraces
+                Resource: "*"
+
+              # Basic identity check used across notebooks (`aws sts get-caller-identity`,
+              # the `agentcore` CLI's own auth check)
+              - Sid: Identity
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+
+  StudioDomain:
+    Type: AWS::SageMaker::Domain
+    Properties:
+      DomainName: !Ref DomainName
+      AuthMode: IAM
+      VpcId: !Ref VpcId
+      SubnetIds: !Ref SubnetIds
+      AppNetworkAccessType: PublicInternetOnly
+      DefaultUserSettings:
+        ExecutionRole: !GetAtt StudioExecutionRole.Arn
+        JupyterLabAppSettings:
+          DefaultResourceSpec:
+            InstanceType: !Ref InstanceType
+
+  StudioUserProfile:
+    Type: AWS::SageMaker::UserProfile
+    Properties:
+      DomainId: !Ref StudioDomain
+      UserProfileName: !Ref UserProfileName
+      UserSettings:
+        ExecutionRole: !GetAtt StudioExecutionRole.Arn
+
+  StudioDefaultSpace:
+    Type: AWS::SageMaker::Space
+    Properties:
+      DomainId: !Ref StudioDomain
+      SpaceName: workshop-jupyterlab
+      OwnershipSettings:
+        OwnerUserProfileName: !Ref UserProfileName
+      SpaceSharingSettings:
+        SharingType: Private
+      SpaceSettings:
+        AppType: JupyterLab
+        JupyterLabAppSettings:
+          DefaultResourceSpec:
+            InstanceType: !Ref InstanceType
+
+Outputs:
+  DomainId:
+    Description: SageMaker Studio domain ID
+    Value: !Ref StudioDomain
+  UserProfileName:
+    Description: Studio user profile name
+    Value: !Ref UserProfileName
+  ExecutionRoleArn:
+    Description: IAM role used by the Studio JupyterLab space -- already has every permission this workshop needs
+    Value: !GetAtt StudioExecutionRole.Arn
+  StudioConsoleUrl:
+    Description: Open this in the AWS Console to launch Studio, pick the user profile above, then click "Open"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/sagemaker/home?region=${AWS::Region}#/studio/${StudioDomain}"

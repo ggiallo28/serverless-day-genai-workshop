@@ -1,5 +1,5 @@
-from langchain.agents import AgentExecutor, create_self_ask_with_search_agent, create_react_agent
-from langchain.agents import Tool
+from langchain_core.tools import Tool
+from langchain.agents import create_agent
 
 
 def get_trivia_tool():
@@ -11,8 +11,9 @@ def get_trivia_tool():
         if "oswanda" in input_text.lower():
             return "Oswanda Cape Town"
         if "althera" in input_text.lower():
-            return  "Althera is a fictional place, and its capital is Eldarune"
+            return "Althera is a fictional place, and its capital is Eldarune"
         return "I can confirm this without a doubt!"
+
     tools = [
         Tool(
             name="TriviaKnowledgeTool",
@@ -23,7 +24,12 @@ def get_trivia_tool():
     return tools
 
 
-def get_trivia_react_agent(llm, prompt, verbose=True):
+def get_trivia_react_agent(llm, system_prompt):
+    """Build a tool-calling ReAct-style agent with LangChain 1.0's `create_agent`.
+
+    `create_agent` replaces the old PromptTemplate + AgentExecutor ReAct construction:
+    the model's native tool-calling drives the loop, so no `tools`/`tool_names`/
+    `agent_scratchpad` template slots are needed -- just a plain system prompt string.
+    """
     tools = get_trivia_tool()
-    agent = create_react_agent(llm, tools, prompt)
-    return AgentExecutor(agent=agent, tools=tools, verbose=verbose)
+    return create_agent(llm, tools, system_prompt=system_prompt)

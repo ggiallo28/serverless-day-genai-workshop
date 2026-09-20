@@ -6,3 +6,7 @@ Dockerfile
 .dockerignore
 .bedrock_agentcore.yaml
 __pycache__/
+UPGRADE_PLAN.md
+linee-guida-workshop.pdf
+linee-guida-workshop-compilato.md
+linee-guida-workshop-compilato.pdf

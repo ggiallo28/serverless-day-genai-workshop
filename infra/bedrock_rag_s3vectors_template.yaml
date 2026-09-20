@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Resources for Q&A Application using Amazon Bedrock - Retrieve API, backed by
+  Amazon S3 Vectors instead of OpenSearch Serverless. Recommended default for
+  workshop-scale usage: pay-as-you-go, no ~4 OCU / ~$700-month floor like
+  OpenSearch Serverless. Use bedrock_rag_template.yaml instead if you need
+  OpenSearch Serverless's higher-QPS production RAG path.
+# NOTE ON VALIDATION: AWS::S3Vectors::VectorBucket / AWS::S3Vectors::Index and the
+# Bedrock::KnowledgeBase StorageConfiguration.Type=S3_VECTORS / S3VectorsConfiguration
+# properties below were confirmed against the live AWS CloudFormation Template Reference
+# docs on 2026-09-20 (aws-resource-s3vectors-vectorbucket.html, aws-resource-s3vectors-index.html,
+# aws-properties-bedrock-knowledgebase-s3vectorsconfiguration.html). `cfn-lint`'s bundled
+# resource spec predates these types/enum values and will falsely flag them (E3006/E3030/E3018) --
+# that is a stale-local-spec issue, not a template error. Validate with `aws cloudformation
+# validate-template` / an actual deploy rather than trusting cfn-lint here until it ships an
+# updated spec.
+Parameters:
+  UUID:
+    Type: String
+    Description: Unique identifier to ensure resource name uniqueness.
+  CreateKnowledgeBase:
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    Description: Set to true to create the Bedrock Knowledge Base after ensuring the vector index exists.
+  CallerIdentity:
+    Type: String
+  EmbeddingModelId:
+    Type: String
+    # Recommended default per the 2026-09-20 model-catalog refresh (see UPGRADE_PLAN.md §4).
+    # Titan Embeddings v2 ("amazon.titan-embed-text-v2:0") is still fine as an alternative --
+    # if you switch, also set EmbeddingDimensions back to 256 (the value this workshop
+    # previously tested with Titan v2).
+    Default: amazon.nova-2-multimodal-embeddings-v1:0
+    Description: Bedrock embedding model used by the Knowledge Base.
+  EmbeddingDimensions:
+    Type: Number
+    # ASSUMPTION TO VERIFY BEFORE DEPLOYING: 1024 is one of Nova Multimodal Embeddings'
+    # documented output sizes (it supports truncation to smaller dimensions), but this
+    # has not been live-tested against this account the way the Titan v2 / 256 pairing
+    # was in UPGRADE_PLAN.md's live-verification pass. Confirm the chosen EmbeddingModelId
+    # actually supports this dimension before running this template for real.
+    Default: 1024
+    Description: Output dimensionality of EmbeddingModelId. Must match a size the model actually supports.
+Conditions:
+  ShouldCreateKnowledgeBase: !Equals
+    - !Ref CreateKnowledgeBase
+    - true
+Resources:
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub kb-${UUID}-${AWS::Region}
+      AccessControl: Private
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}
+              - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}/*
+
+  BedrockExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub agent-role-s3v-${UUID}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}
+                  - !Sub arn:aws:s3:::kb-${UUID}-${AWS::Region}/*
+        - PolicyName: S3VectorsAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3vectors:*
+                Resource: '*'
+        - PolicyName: BedrockAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    # No VectorBucketName given on purpose -- CloudFormation generates a unique name,
+    # avoiding collisions when multiple attendees deploy this template in the same account.
+
+  VectorIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketArn: !Ref VectorBucket
+      DataType: float32
+      Dimension: !Ref EmbeddingDimensions
+      DistanceMetric: cosine
+
+  BedrockKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Condition: ShouldCreateKnowledgeBase
+    Properties:
+      Name: !Sub kb-kb-s3v-${UUID}
+      Description: Knowledge Base for Q&A Application using Bedrock, backed by S3 Vectors
+      RoleArn: !GetAtt BedrockExecutionRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: "VECTOR"
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: !Ref EmbeddingDimensions
+      StorageConfiguration:
+        Type: "S3_VECTORS"
+        S3VectorsConfiguration:
+          VectorBucketArn: !Ref VectorBucket
+          IndexArn: !Ref VectorIndex
+
+  BedrockDataSource:
+    Type: AWS::Bedrock::DataSource
+    Condition: ShouldCreateKnowledgeBase
+    Properties:
+      Name: !Sub kb-data-s3v-${UUID}
+      Description: Data Source for Bedrock Q&A Application
+      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt S3Bucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 512
+            OverlapPercentage: 20
+Outputs:
+  S3BucketName:
+    Value: !Ref S3Bucket
+    Description: Name of the S3 bucket for document storage.
+  BedrockExecutionRoleArn:
+    Value: !GetAtt BedrockExecutionRole.Arn
+    Description: ARN of the IAM role for Bedrock execution.
+  VectorBucketArn:
+    Value: !Ref VectorBucket
+    Description: ARN of the S3 Vectors bucket.
+  VectorIndexArn:
+    Value: !Ref VectorIndex
+    Description: ARN of the S3 Vectors index.
+  BedrockKnowledgeBaseId:
+    Condition: ShouldCreateKnowledgeBase
+    Value: !Ref BedrockKnowledgeBase
+    Description: ID of the Bedrock Knowledge Base.
+  BedrockDataSourceId:
+    Condition: ShouldCreateKnowledgeBase
+    Value: !Ref BedrockDataSource
+    Description: ID of the Bedrock Data Source.

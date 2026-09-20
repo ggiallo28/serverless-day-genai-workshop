@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Execution role for the AgentCore harness used in notebook 4 (restaurant concierge).
+  This is the ONLY resource this template provisions -- the restaurant-facts Lambda
+  itself is created directly from the notebook via src/utils.py's create_gateway_lambda,
+  the same helper already used for the calc/ and restaurant/ Gateway tools in notebook 6.
+  The harness's default (CLI-auto-created) execution role is enough for a prompt-only
+  harness, but lacks the bedrock-agentcore Memory actions -- see notebook 4's
+  Troubleshooting section for why this role gets wired into harness.json explicitly
+  once the Memory step is introduced.
+
+Parameters:
+  UUID:
+    Type: String
+    Description: A unique identifier to ensure resource name uniqueness.
+
+Resources:
+  HarnessExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "agentcore-restaurant-harness-role-${UUID}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "agentcore-restaurant-harness-policy-${UUID}"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+Outputs:
+  HarnessExecutionRoleArn:
+    Description: ARN of the AgentCore harness execution role
+    Value: !GetAtt HarnessExecutionRole.Arn

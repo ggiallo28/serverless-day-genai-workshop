@@ -1,0 +1,27 @@
+{
+  "private_events": {
+    "restaurant_name": "The Bedrock Bistro",
+    "private_dining_room": {
+      "name": "The Harness Room",
+      "capacity_min": 6,
+      "capacity_max": 24,
+      "base_fee_usd": 150,
+      "minimum_spend_usd": 800,
+      "notice_period_days": 7
+    },
+    "catering_packages": [
+      {
+        "name": "Serverless Standard",
+        "per_guest_usd": 45,
+        "includes": ["3-course plated menu", "still/sparkling water", "coffee service"]
+      },
+      {
+        "name": "Managed Runtime Premium",
+        "per_guest_usd": 75,
+        "includes": ["4-course plated menu", "wine pairing", "dessert station", "coffee service"]
+      }
+    ],
+    "large_party_policy": "Parties of 6 or more require at least 7 days' notice and a non-refundable deposit equal to the private dining room's base fee.",
+    "contact_for_confirmation": "events@thebedrockbistro.example (a human host confirms all private-event bookings; this specialist only qualifies the request and shares options)"
+  }
+}
