@@ -12,4 +12,9 @@ beautifulsoup4
 markdownify>=0.14.0
 uv==0.9.11
 bedrock-agentcore>=1.23.0
-bedrock-agentcore-starter-toolkit>=0.3.0
+# NOTE: bedrock-agentcore-starter-toolkit (the Python `agentcore` CLI) is deprecated by AWS
+# in favor of the npm-distributed `@aws/agentcore` CLI -- installing the Python package puts
+# a conflicting, incompatible `agentcore` binary on PATH (different flags, no --version, no
+# harness.json/add-memory/add-gateway/add-tool support). The real CLI notebooks 4-6 use is
+# installed via `npm install -g @aws/agentcore` (see resources/scripts/studio_lifecycle_config.sh).
+json_repair

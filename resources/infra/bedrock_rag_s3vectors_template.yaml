@@ -29,20 +29,21 @@ Parameters:
     Type: String
   EmbeddingModelId:
     Type: String
-    # Recommended default per the 2026-09-20 model-catalog refresh (see UPGRADE_PLAN.md §4).
-    # Titan Embeddings v2 ("amazon.titan-embed-text-v2:0") is still fine as an alternative --
-    # if you switch, also set EmbeddingDimensions back to 256 (the value this workshop
-    # previously tested with Titan v2).
-    Default: amazon.nova-2-multimodal-embeddings-v1:0
+    # Default: Titan Embeddings v2 -- confirmed working live in this workshop's Knowledge Base flow.
+    # Nova Multimodal Embeddings ("amazon.nova-2-multimodal-embeddings-v1:0") was tried as the
+    # default first, but Bedrock's CreateKnowledgeBase rejects it without also configuring a
+    # multimodal storage destination ("requires a multimodal storage destination" InvalidRequest,
+    # confirmed live 2026-09-20) -- this template doesn't set that up, so Titan v2 is the one
+    # that actually works out of the box. If you want to switch to Nova Multimodal Embeddings,
+    # you'll need to add `SupplementalDataStorageConfiguration` (an S3 location) to the KB's
+    # vectorKnowledgeBaseConfiguration first.
+    Default: amazon.titan-embed-text-v2:0
     Description: Bedrock embedding model used by the Knowledge Base.
   EmbeddingDimensions:
     Type: Number
-    # ASSUMPTION TO VERIFY BEFORE DEPLOYING: 1024 is one of Nova Multimodal Embeddings'
-    # documented output sizes (it supports truncation to smaller dimensions), but this
-    # has not been live-tested against this account the way the Titan v2 / 256 pairing
-    # was in UPGRADE_PLAN.md's live-verification pass. Confirm the chosen EmbeddingModelId
-    # actually supports this dimension before running this template for real.
-    Default: 1024
+    # 256 is Titan Embeddings v2's smallest/cheapest supported output size, live-verified
+    # working in UPGRADE_PLAN.md's live-verification pass.
+    Default: 256
     Description: Output dimensionality of EmbeddingModelId. Must match a size the model actually supports.
 Conditions:
   ShouldCreateKnowledgeBase: !Equals
@@ -127,6 +128,18 @@ Resources:
       DataType: float32
       Dimension: !Ref EmbeddingDimensions
       DistanceMetric: cosine
+      # Required when bringing your own S3 Vectors index (vs. Bedrock's "quick create" flow,
+      # which sets this up automatically): without it, Bedrock stores the full chunk text as
+      # *filterable* metadata, capped at 2048 bytes regardless of chunk size -- causing
+      # "Filterable metadata must have at most 2048 bytes" ingestion failures even with a
+      # small MaxTokens. Marking these two Bedrock-reserved keys non-filterable moves them
+      # into the 40KB total-metadata budget instead. Confirmed live 2026-09-20; see
+      # https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
+      # (Amazon S3 Vectors tab, "Create S3 vector bucket and index").
+      MetadataConfiguration:
+        NonFilterableMetadataKeys:
+          - AMAZON_BEDROCK_TEXT
+          - AMAZON_BEDROCK_METADATA
 
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
@@ -163,8 +176,13 @@ Resources:
         ChunkingConfiguration:
           ChunkingStrategy: FIXED_SIZE
           FixedSizeChunkingConfiguration:
-            MaxTokens: 512
-            OverlapPercentage: 20
+            # The real fix for "Filterable metadata must have at most 2048 bytes" is on
+            # VectorIndex above (AMAZON_BEDROCK_TEXT/AMAZON_BEDROCK_METADATA marked
+            # non-filterable) -- without that, Bedrock stores the full chunk text as
+            # filterable metadata regardless of MaxTokens, and even small chunks can fail.
+            # MaxTokens: 128 / OverlapPercentage: 1 confirmed working live 2026-09-20.
+            MaxTokens: 128
+            OverlapPercentage: 1
 Outputs:
   S3BucketName:
     Value: !Ref S3Bucket

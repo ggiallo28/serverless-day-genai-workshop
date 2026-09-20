@@ -2,7 +2,7 @@ STUDIO_STACK_NAME ?= genai-workshop-studio
 STUDIO_REGION ?= us-east-1
 
 .DEFAULT_GOAL := help
-.PHONY: help install lock env jupyter validate clean tree studio-init studio-url studio-destroy teardown teardown-dry-run
+.PHONY: help install lock env jupyter validate clean tree studio-init studio-update studio-url studio-destroy teardown teardown-dry-run
 
 help: ## Show this list of commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-10s %s\n", $$1, $$2}'
@@ -70,23 +70,52 @@ studio-init: ## Deploy a ready-to-go SageMaker Studio (JupyterLab) for this work
 			--query 'Subnets[].SubnetId' --output text --region $(STUDIO_REGION) | tr '\t' ','); \
 	fi; \
 	echo "Using VPC $$vpc_id, subnets $$subnet_ids"; \
+	if [ -n "$(SKIP_LIFECYCLE)" ]; then \
+		echo "SKIP_LIFECYCLE set -- not attaching a Lifecycle Configuration this deploy"; \
+		echo "(the LCC resource itself, if it already exists, is left untouched -- only this deploy omits the reference)."; \
+		lcc_arn=""; \
+	else \
+		lcc_name="$(STUDIO_STACK_NAME)-lifecycle"; \
+		lcc_arn=$$(aws sagemaker describe-studio-lifecycle-config --studio-lifecycle-config-name "$$lcc_name" \
+			--region $(STUDIO_REGION) --query 'StudioLifecycleConfigArn' --output text 2>/dev/null || true); \
+		if [ -z "$$lcc_arn" ] || [ "$$lcc_arn" = "None" ]; then \
+			echo "Creating Studio Lifecycle Configuration $$lcc_name (clones the repo + runs 'pip install -r requirements.txt', including the agentcore CLI, on space start)..."; \
+			lcc_b64=$$(base64 -w 0 resources/scripts/studio_lifecycle_config.sh 2>/dev/null || base64 resources/scripts/studio_lifecycle_config.sh | tr -d '\n'); \
+			lcc_arn=$$(aws sagemaker create-studio-lifecycle-config \
+				--studio-lifecycle-config-name "$$lcc_name" \
+				--studio-lifecycle-config-app-type JupyterLab \
+				--studio-lifecycle-config-content "$$lcc_b64" \
+				--region $(STUDIO_REGION) \
+				--query 'StudioLifecycleConfigArn' --output text); \
+		else \
+			echo "Reusing existing Studio Lifecycle Configuration $$lcc_name (content is immutable -- if you edited"; \
+			echo "resources/scripts/studio_lifecycle_config.sh, delete it first: aws sagemaker delete-studio-lifecycle-config --studio-lifecycle-config-name $$lcc_name --region $(STUDIO_REGION))"; \
+		fi; \
+	fi; \
+	echo "LifecycleConfigArn: $${lcc_arn:-<none>}"; \
 	aws cloudformation deploy \
 		--template-file resources/infra/sagemaker_studio_init_template.yaml \
 		--stack-name $(STUDIO_STACK_NAME) \
 		--region $(STUDIO_REGION) \
 		--capabilities CAPABILITY_NAMED_IAM \
-		--parameter-overrides VpcId=$$vpc_id SubnetIds=$$subnet_ids
+		--no-fail-on-empty-changeset \
+		--parameter-overrides VpcId=$$vpc_id SubnetIds=$$subnet_ids LifecycleConfigArn=$$lcc_arn
 	@$(MAKE) studio-url
+
+studio-update: studio-init ## Alias for studio-init -- safe to re-run any time to push template/role changes to the existing stack
 
 studio-url: ## Print the console URL and role ARN for the deployed Studio environment
 	@aws cloudformation describe-stacks --stack-name $(STUDIO_STACK_NAME) --region $(STUDIO_REGION) \
 		--query 'Stacks[0].Outputs' --output table
 
 studio-destroy: ## Tear down the SageMaker Studio environment (destructive -- confirms first)
-	@echo "This deletes the Studio domain/user/space/role in stack $(STUDIO_STACK_NAME) ($(STUDIO_REGION))."
+	@echo "This deletes the Studio domain/user/space/role in stack $(STUDIO_STACK_NAME) ($(STUDIO_REGION)),"
+	@echo "plus the $(STUDIO_STACK_NAME)-lifecycle Lifecycle Configuration (created outside CloudFormation)."
 	@read -p "Type 'yes' to continue: " confirm; \
 	if [ "$$confirm" = "yes" ]; then \
 		aws cloudformation delete-stack --stack-name $(STUDIO_STACK_NAME) --region $(STUDIO_REGION); \
+		aws cloudformation wait stack-delete-complete --stack-name $(STUDIO_STACK_NAME) --region $(STUDIO_REGION) 2>/dev/null || true; \
+		aws sagemaker delete-studio-lifecycle-config --studio-lifecycle-config-name "$(STUDIO_STACK_NAME)-lifecycle" --region $(STUDIO_REGION) 2>/dev/null || true; \
 		echo "Delete requested -- check the CloudFormation console for progress."; \
 	else \
 		echo "Aborted."; \

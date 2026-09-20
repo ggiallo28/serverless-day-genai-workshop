@@ -49,6 +49,20 @@ Parameters:
       comfortably runs this workshop (all AWS inference happens server-side via Bedrock;
       the notebook kernel itself does very little local compute).
 
+  LifecycleConfigArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of a SageMaker Studio Lifecycle Configuration (JupyterLab app type) that clones
+      this repo and installs its dependencies on space start. Leave blank to skip -- the
+      Studio environment still works, you'd just `git clone`/`make install` by hand once.
+      `make studio-init` creates this LCC itself (outside CloudFormation, since a brand-new
+      LCC referenced in the same changeset as the Domain/Space fails CloudFormation's
+      early-validation property check) and passes its ARN in automatically.
+
+Conditions:
+  HasLifecycleConfig: !Not [!Equals [!Ref LifecycleConfigArn, ""]]
+
 Resources:
   StudioExecutionRole:
     Type: AWS::IAM::Role
@@ -90,11 +104,18 @@ Resources:
                   - bedrock:DeleteKnowledgeBase
                   - bedrock:CreateDataSource
                   - bedrock:GetDataSource
+                  - bedrock:UpdateDataSource
+                  - bedrock:DeleteDataSource
+                  - bedrock:ListDataSources
+                  - bedrock:ListKnowledgeBases
                   - bedrock:StartIngestionJob
                   - bedrock:GetIngestionJob
                   - bedrock:ListIngestionJobs
                   - bedrock:Retrieve
                   - bedrock:RetrieveAndGenerate
+                  - bedrock:TagResource
+                  - bedrock:UntagResource
+                  - bedrock:ListTagsForResource
                 Resource: "*"
               - Sid: VectorStores
                 Effect: Allow
@@ -148,9 +169,35 @@ Resources:
                   - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStackResources
                   - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
                   - cloudformation:ValidateTemplate
                   - cloudformation:ListStackResources
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
                 Resource: "*"
+
+              # `agentcore deploy` (notebooks 4-6) shells out to the AWS CDK, which deploys via
+              # change sets against the account's existing CDKToolkit bootstrap stack (already
+              # bootstrapped in this account) and reads its bootstrap-version SSM parameter.
+              - Sid: CdkBootstrapForAgentCoreDeploy
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  # PutParameter/DeleteParameter: needed when `agentcore deploy` (CDK) upgrades
+                  # this account's existing (older) CDKToolkit bootstrap stack, which
+                  # updates/replaces its own CdkBootstrapVersion parameter.
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                  - ssm:RemoveTagsFromResource
+                  - ssm:ListTagsForResource
+                # Widened to all SSM parameters (still SSM-only, not account-wide) since the
+                # narrower /cdk-bootstrap/* scope wasn't sufficient to clear an AccessDenied
+                # on this same CdkBootstrapVersion parameter even after granting PutParameter.
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
 
               # CFN in this workshop creates roles for its own Lambdas/KB service role/
               # harness execution role -- the deploying principal needs to create + pass
@@ -170,21 +217,39 @@ Resources:
                   - iam:ListAttachedRolePolicies
                   - iam:PassRole
                   - iam:TagRole
+                  # Needed by `agentcore deploy` (CDK) upgrading this account's existing
+                  # CDKToolkit bootstrap stack -- CDK's FilePublishingRole/ImagePublishingRole/
+                  # LookupRole trust policies get rewritten on a bootstrap-version upgrade.
+                  - iam:UpdateAssumeRolePolicy
+                Resource: "*"
+
+              # `agentcore deploy` (CDK) upgrading this account's existing CDKToolkit bootstrap
+              # stack also needs to (re)create/configure the CDK container-assets ECR repo.
+              - Sid: EcrForCdkBootstrap
+                Effect: Allow
+                Action:
+                  - ecr:*
+                Resource: "*"
+
+              # `agentcore deploy` (CDK) upgrading this account's existing CDKToolkit bootstrap
+              # stack creates a customer-managed KMS key (FileAssetsBucketEncryptionKey) for the
+              # staging bucket -- older bootstrap template versions didn't have this key at all.
+              - Sid: KmsForCdkBootstrap
+                Effect: Allow
+                Action:
+                  - kms:*
                 Resource: "*"
 
               # Notebook 2 (KB data bucket), notebook 6 (skills upload to S3), and any
               # CFN-created buckets
+              # Widened to s3:* (from an enumerated action list) after the CDK bootstrap
+              # stack's StagingBucket kept failing one S3 bucket-config action at a time
+              # (PutLifecycleConfiguration, etc.) -- same "intentionally broad for sandbox"
+              # tradeoff as EcrForCdkBootstrap/KmsForCdkBootstrap above.
               - Sid: S3ForDataAndSkills
                 Effect: Allow
                 Action:
-                  - s3:CreateBucket
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                  - s3:PutBucketPolicy
-                  - s3:PutEncryptionConfiguration
-                  - s3:PutBucketVersioning
+                  - s3:*
                 Resource: "*"
 
               # DynamoDB: kept for the legacy Bedrock Agent booking-table pattern some
@@ -226,6 +291,19 @@ Resources:
                   - sts:GetCallerIdentity
                 Resource: "*"
 
+              # SageMaker Studio's own JupyterLab UI (not the notebooks' code) calls
+              # sagemaker:* APIs constantly just to render itself and manage the space's
+              # lifecycle (start/stop/update) -- without broad self-service access here you
+              # get opaque errors like "Permission issue detected" or "Unable to complete
+              # operation" that have nothing to do with anything the notebooks actually do.
+              # Scoped to the sagemaker service only (not IAM/EC2/etc), intentionally broad
+              # for the same reason as the rest of this template (see file description).
+              - Sid: StudioSelfService
+                Effect: Allow
+                Action:
+                  - sagemaker:*
+                Resource: "*"
+
   StudioDomain:
     Type: AWS::SageMaker::Domain
     Properties:
@@ -239,6 +317,10 @@ Resources:
         JupyterLabAppSettings:
           DefaultResourceSpec:
             InstanceType: !Ref InstanceType
+            LifecycleConfigArn: !If [HasLifecycleConfig, !Ref LifecycleConfigArn, !Ref "AWS::NoValue"]
+          LifecycleConfigArns: !If [HasLifecycleConfig, [!Ref LifecycleConfigArn], !Ref "AWS::NoValue"]
+          CodeRepositories:
+            - RepositoryUrl: https://github.com/ggiallo28/serverless-day-genai-workshop.git
 
   StudioUserProfile:
     Type: AWS::SageMaker::UserProfile
@@ -250,6 +332,7 @@ Resources:
 
   StudioDefaultSpace:
     Type: AWS::SageMaker::Space
+    DependsOn: StudioUserProfile
     Properties:
       DomainId: !Ref StudioDomain
       SpaceName: workshop-jupyterlab
@@ -262,6 +345,9 @@ Resources:
         JupyterLabAppSettings:
           DefaultResourceSpec:
             InstanceType: !Ref InstanceType
+            LifecycleConfigArn: !If [HasLifecycleConfig, !Ref LifecycleConfigArn, !Ref "AWS::NoValue"]
+          CodeRepositories:
+            - RepositoryUrl: https://github.com/ggiallo28/serverless-day-genai-workshop.git
 
 Outputs:
   DomainId:
