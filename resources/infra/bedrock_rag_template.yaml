@@ -1,5 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Resources for Q&A Application using Amazon Bedrock - Retrieve API
+Description: >
+  Resources for Q&A Application using Amazon Bedrock - Retrieve API. BedrockExecutionRole
+  is prefixed "Recube-Sandbox-Role-": the workshop's sandbox AWS account has an SCP that
+  denies any action to a role whose ARN doesn't match
+  arn:aws:iam:::role/Recube-Sandbox-Role* -- without this prefix the role deploys fine but
+  can't actually do anything.
 Parameters:
   UUID:
     Type: String
@@ -44,7 +49,7 @@ Resources:
   BedrockExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub agent-role-${UUID}
+      RoleName: !Sub Recube-Sandbox-Role-agent-${UUID}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

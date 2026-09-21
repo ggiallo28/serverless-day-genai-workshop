@@ -5,6 +5,11 @@ Description: >
   workshop-scale usage: pay-as-you-go, no ~4 OCU / ~$700-month floor like
   OpenSearch Serverless. Use bedrock_rag_template.yaml instead if you need
   OpenSearch Serverless's higher-QPS production RAG path.
+
+  BedrockExecutionRole is prefixed "Recube-Sandbox-Role-": the workshop's sandbox AWS
+  account has an SCP that denies any action to a role whose ARN doesn't match
+  arn:aws:iam:::role/Recube-Sandbox-Role* -- without this prefix the role deploys fine but
+  can't actually do anything.
 # NOTE ON VALIDATION: AWS::S3Vectors::VectorBucket / AWS::S3Vectors::Index and the
 # Bedrock::KnowledgeBase StorageConfiguration.Type=S3_VECTORS / S3VectorsConfiguration
 # properties below were confirmed against the live AWS CloudFormation Template Reference
@@ -77,7 +82,7 @@ Resources:
   BedrockExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub agent-role-s3v-${UUID}
+      RoleName: !Sub Recube-Sandbox-Role-agent-s3v-${UUID}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

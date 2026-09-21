@@ -9,6 +9,11 @@ Description: >
   Troubleshooting section for why this role gets wired into harness.json explicitly
   once the Memory step is introduced.
 
+  Role/policy names are prefixed "Recube-Sandbox-Role-"/"Recube-Sandbox-Policy-": the
+  workshop's sandbox AWS account has an SCP that denies any action to a role whose ARN
+  doesn't match arn:aws:iam:::role/Recube-Sandbox-Role* -- without this prefix the role
+  deploys fine but can't actually do anything.
+
 Parameters:
   UUID:
     Type: String
@@ -18,7 +23,7 @@ Resources:
   HarnessExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "agentcore-restaurant-harness-role-${UUID}"
+      RoleName: !Sub "Recube-Sandbox-Role-agentcore-restaurant-harness-${UUID}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -27,7 +32,7 @@ Resources:
               Service: bedrock-agentcore.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: !Sub "agentcore-restaurant-harness-policy-${UUID}"
+        - PolicyName: !Sub "Recube-Sandbox-Policy-agentcore-restaurant-harness-${UUID}"
           PolicyDocument:
             Version: "2012-10-17"
             Statement:

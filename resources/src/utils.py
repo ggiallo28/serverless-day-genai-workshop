@@ -24,7 +24,10 @@ IAM_TRUST_POLICY = {
 }
 
 # AgentCore Gateway IAM Role constants
-GATEWAY_AGENTCORE_ROLE_NAME = "GatewaySearchAgentCoreRole"
+# "Recube-Sandbox-Role-" prefix: the workshop's sandbox AWS account has an SCP that denies
+# any action to a role whose ARN doesn't match arn:aws:iam:::role/Recube-Sandbox-Role* --
+# without this prefix the role deploys fine but can't actually do anything.
+GATEWAY_AGENTCORE_ROLE_NAME = "Recube-Sandbox-Role-GatewaySearchAgentCoreRole"
 GATEWAY_AGENTCORE_TRUST_POLICY = {
     "Version": "2012-10-17",
     "Statement": [
@@ -135,7 +138,12 @@ def create_gateway_lambda(
     lambda_client = boto3.client("lambda", region_name=region)
     iam_client = boto3.client("iam", region_name=region)
 
-    role_name = f"{lambda_function_name}_lambda_iamrole"
+    # "Recube-Sandbox-Role-" prefix: the workshop's sandbox AWS account has an SCP that
+    # denies any action to a role whose ARN doesn't match
+    # arn:aws:iam:::role/Recube-Sandbox-Role* -- without this prefix the role deploys fine
+    # but can't actually do anything. Truncated to IAM's 64-char role name limit; the prefix
+    # stays intact since it's at the front, so the SCP wildcard match still holds.
+    role_name = f"Recube-Sandbox-Role-{lambda_function_name}"[:64]
 
     print("Reading code from zip file")
     with open(lambda_function_code_path, "rb") as f:
@@ -408,7 +416,7 @@ def delete_gateway_lambda(lambda_function_arn: str) -> bool:
 
     # Extract function name from ARN
     lambda_function_name = _extract_function_name_from_arn(lambda_function_arn)
-    role_name = f"{lambda_function_name}_lambda_iamrole"
+    role_name = f"Recube-Sandbox-Role-{lambda_function_name}"[:64]
 
     try:
         # Delete Lambda function (can use ARN or name)

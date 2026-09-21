@@ -34,7 +34,11 @@ Parameters:
   DomainName:
     Type: String
     Default: genai-workshop-studio
-    Description: Name for the SageMaker Studio domain.
+    MaxLength: 29
+    Description: >
+      Name for the SageMaker Studio domain. Capped at 29 chars: it's embedded in
+      StudioExecutionRole's name as "Recube-Sandbox-Role-${DomainName}-execution-role",
+      and IAM role names max out at 64 chars total.
 
   UserProfileName:
     Type: String
@@ -69,7 +73,7 @@ Resources:
   StudioExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${DomainName}-execution-role"
+      RoleName: !Sub "Recube-Sandbox-Role-${DomainName}-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
