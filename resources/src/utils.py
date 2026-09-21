@@ -1,9 +1,13 @@
+import datetime
 import json
+import os
 import time
+import uuid
 from typing import Dict, List, Optional, Union
 
 import boto3
 from botocore.exceptions import ClientError
+from IPython.display import Markdown, display
 
 LAMBDA_EXECUTION_ROLE_POLICY = (
     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -571,6 +575,188 @@ def delete_cognito_user_pool(
         return False
 
 
+def get_harness_arn(project_dir: str, harness_name: str) -> str:
+    """Read a deployed harness's data-plane ARN out of the agentcore CLI's local state file.
+
+    Returns `harnessArn` -- the field used by the `bedrock-agentcore` boto3 client's
+    `invoke_harness()` data-plane API. This is distinct from `agentRuntimeArn` (used by
+    `agentcore run eval --runtime-arn`), which lives alongside it in the same state file
+    but is not what `invoke_harness()` expects.
+
+    Args:
+        project_dir: The `agentcore create --project-name` directory for the harness.
+        harness_name: The `agentcore create --name` of the harness.
+
+    Returns:
+        The harness's `harnessArn`.
+    """
+    state_path = f"{project_dir}/agentcore/.cli/deployed-state.json"
+    with open(state_path) as f:
+        state = json.load(f)
+    harnesses = state["targets"]["default"]["resources"]["harnesses"]
+    return harnesses[harness_name]["harnessArn"]
+
+
+def parse_agentcore_stream(result) -> Dict[str, Union[str, None, Dict]]:
+    """Parse the JSON-lines stdout of `agentcore invoke --json` into assistant text and any tool call.
+
+    Args:
+        result: A completed `subprocess.run(...)` result for an `agentcore invoke --json` call.
+
+    Returns:
+        Dict with `assistant_text`, `tool_name`, `tool_use_id`, and `tool_input` (parsed as
+        JSON when possible).
+    """
+    tool_name = None
+    tool_use_id = None
+    tool_input = ""
+    assistant_text = ""
+
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        if event.get("type") == "contentBlockDelta":
+            delta = event.get("delta", {})
+
+            if delta.get("type") == "text":
+                assistant_text += delta.get("text", "")
+
+            elif delta.get("type") == "toolUse":
+                tool_input += delta.get("input", "")
+
+        elif event.get("type") == "contentBlockStart":
+            start = event.get("start", {})
+
+            if start.get("type") == "toolUse":
+                # A harness invocation can make several tool calls in one streamed response
+                # (e.g. an auto-executed Gateway tool, then a client-side inline_function tool
+                # that pauses the stream). Reset the buffer on each new tool call so we only
+                # keep the *latest* one -- the one actually pending for the client.
+                tool_name = start["toolUse"]["name"]
+                tool_use_id = start["toolUse"]["toolUseId"]
+                tool_input = ""
+
+    parsed_tool_input = None
+
+    if tool_input:
+        try:
+            parsed_tool_input = json.loads(tool_input)
+        except json.JSONDecodeError:
+            parsed_tool_input = tool_input
+
+    return {
+        "assistant_text": assistant_text,
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id,
+        "tool_input": parsed_tool_input,
+    }
+
+
+def display_agentcore_result(result) -> Dict[str, Union[str, None, Dict]]:
+    """Pretty-print an `agentcore invoke --json` result and return its parsed form.
+
+    Args:
+        result: A completed `subprocess.run(...)` result for an `agentcore invoke --json` call.
+
+    Returns:
+        The same dict returned by `parse_agentcore_stream`.
+    """
+    parsed = parse_agentcore_stream(result)
+
+    print("=" * 100)
+    print("ASSISTANT")
+    print("=" * 100)
+
+    if parsed["assistant_text"]:
+        print(parsed["assistant_text"])
+    else:
+        print("No assistant text returned.")
+
+    print("\n" + "=" * 100)
+    print("TOOL CALL")
+    print("=" * 100)
+
+    if parsed["tool_name"]:
+        print(f"Tool: {parsed['tool_name']}")
+        print(f"Tool Use ID: {parsed['tool_use_id']}")
+
+        print("\nInput:")
+
+        if isinstance(parsed["tool_input"], dict):
+            print(json.dumps(parsed["tool_input"], indent=2))
+        else:
+            print(parsed["tool_input"])
+    else:
+        print("No tool call detected.")
+
+    return parsed
+
+
+def save_booking_request(
+    date: str,
+    hour: str,
+    guest_name: str,
+    num_guests: int,
+    restaurant_name: str = "The Bedrock Bistro",
+    output_path: str = "resources/data/booking_requests.jsonl",
+) -> Dict:
+    """Validate and persist a restaurant booking request as one JSON line.
+
+    This is the client-side executor for an AgentCore harness `inline_function` tool
+    (e.g. notebook 4's `request_booking`): the harness never runs an inline_function
+    tool itself -- it pauses and hands the tool call back to the client application,
+    which is expected to run its own function (matching the tool's `inputSchema`
+    fields) and, optionally, send a result back via `invoke_harness`.
+
+    Args:
+        date: Booking date, format YYYY-MM-DD.
+        hour: Booking hour, format HH:MM.
+        guest_name: Name of the guest for the reservation.
+        num_guests: Number of guests for the booking.
+        restaurant_name: Name of the restaurant handling the reservation.
+        output_path: Where to append the booking record (JSON Lines). Created if
+            missing. Callers running from a different working directory (e.g. a
+            notebook under `solutions/`) should pass a path adjusted accordingly.
+
+    Returns:
+        Dict with 'ok', 'tool', 'message', and 'record' keys -- ready to send back
+        as a harness tool result.
+
+    Raises:
+        ValueError: If date, hour, guest_name, or num_guests is missing.
+    """
+    if not (date and hour and guest_name and num_guests):
+        raise ValueError("save_booking_request requires date, hour, guest_name, and num_guests")
+
+    record = {
+        "id": f"booking_{uuid.uuid4()}",
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "restaurant_name": restaurant_name,
+        "date": date,
+        "hour": hour,
+        "guest_name": guest_name,
+        "num_guests": int(num_guests),
+        "status": "requested",
+    }
+
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+    return {
+        "ok": True,
+        "tool": "request_booking",
+        "message": f"Booking requested with id {record['id']}",
+        "record": record,
+    }
+
+
 def setup_cognito_user_pool(
     pool_name: str = COGNITO_POOL_NAME,
     client_name: str = COGNITO_CLIENT_NAME,
@@ -622,3 +808,151 @@ def setup_cognito_user_pool(
     except Exception as error:
         print(f"Unexpected error setting up Cognito: {str(error)}")
         return None
+
+
+def format_qa_answer_with_references(result: Dict) -> str:
+    """Format a LangChain RetrievalQA `invoke()` result into an answer plus a
+    deduplicated reference list.
+
+    Pulls the S3 source URI, page number, and relevance score out of each source
+    document's metadata -- the fields the `AmazonKnowledgeBasesRetriever` copies over
+    from the Bedrock Knowledge Base Retrieve API.
+
+    Args:
+        result: The dict returned by `qa.invoke({"query": question})`, where `qa` is a
+            RetrievalQA chain built with `return_source_documents=True`.
+
+    Returns:
+        A string formatted as "Response:\\n<answer>\\n\\nReferences:\\n1. <reference>...".
+    """
+    answer_text = result["result"]
+
+    references = []
+    for doc in result["source_documents"]:
+        metadata = doc.metadata
+        source_uri = metadata.get("location", {}).get("s3Location", {}).get("uri", "Unknown source")
+        source_name = os.path.basename(source_uri)
+
+        page = metadata.get("source_metadata", {}).get("x-amz-bedrock-kb-document-page-number")
+        reference = f"{source_name}, page {int(page)}" if page is not None else source_name
+
+        score = metadata.get("score")
+        if score is not None:
+            reference += f" -- score: {score:.3f}"
+
+        if reference not in references:
+            references.append(reference)
+
+    lines = [f"Response:\n{answer_text}", "", "References:"]
+    lines += [f"{i}. {reference}" for i, reference in enumerate(references, start=1)]
+    return "\n".join(lines)
+
+
+def render_model_output(text: str, label: str = "BEDROCK MODEL OUTPUT") -> None:
+    """Pretty-print a Bedrock text response inside BEGIN/END delimiter banners,
+    rendering the text itself as Markdown.
+
+    Args:
+        text: The generated text to display (e.g. the string returned by an
+            `invoke_model` helper, or a value pulled out of the parsed response body).
+        label: Text shown in the banners, useful when displaying more than one
+            response in the same notebook cell.
+    """
+    delimiter = "=" * 100
+    print(f"\n{delimiter}")
+    print(f"BEGIN {label}")
+    print(f"{delimiter}\n")
+
+    display(Markdown(text))
+
+    print(f"\n{delimiter}")
+    print(f"END {label}")
+    print(f"{delimiter}\n")
+
+
+def extract_tools_from_search_response(search_response: Dict) -> List[Dict]:
+    """Parse the tool list out of an ``x_amz_bedrock_agentcore_search`` MCP response.
+
+    Gateway's search response shape is inconsistent: the tool list is usually at
+    ``response["result"]["structuredContent"]["tools"]``, but some Gateways instead
+    return it as JSON-encoded text inside ``response["result"]["content"]``. This
+    handles both.
+
+    Args:
+        search_response: The raw JSON-RPC response from calling the built-in
+            ``x_amz_bedrock_agentcore_search`` tool (e.g. via ``invoke_gateway_tool``).
+
+    Returns:
+        The list of matching tool dicts.
+
+    Raises:
+        ValueError: If no tool list could be found in either response shape.
+    """
+    result = search_response["result"]
+
+    if "structuredContent" in result:
+        return result["structuredContent"]["tools"]
+
+    for content in result.get("content", []):
+        if content.get("type") == "text":
+            try:
+                parsed = json.loads(content["text"])
+                if "tools" in parsed:
+                    return parsed["tools"]
+            except json.JSONDecodeError:
+                pass
+
+    raise ValueError(f"No tools found in Gateway search response: {search_response}")
+
+
+def get_memory_id_from_deployed_state(project_dir: str = "RestaurantConcierge") -> str:
+    """Read the first memory ID out of a harness's ``deployed-state.json``.
+
+    Args:
+        project_dir: Harness project directory (e.g. "RestaurantConcierge"), as passed
+            to `agentcore` CLI commands.
+
+    Returns:
+        The `memoryId` of the first memory resource recorded in the deployed state.
+    """
+    state_path = f"{project_dir}/agentcore/.cli/deployed-state.json"
+    with open(state_path) as f:
+        state = json.load(f)
+    memories = state["targets"]["default"]["resources"]["memories"]
+    return list(memories.values())[0]["memoryId"]
+
+
+def delete_gateway_targets(agentcore_client, gateway_id: str) -> None:
+    """Delete every target attached to a Gateway, pacing calls to avoid throttling.
+
+    Args:
+        agentcore_client: A boto3 `bedrock-agentcore-control` client.
+        gateway_id: Identifier of the Gateway whose targets should be deleted.
+    """
+    response = agentcore_client.list_gateway_targets(gatewayIdentifier=gateway_id)
+    for target in response["items"]:
+        print(f"Deleting target {target['name']} ({target['targetId']})")
+        agentcore_client.delete_gateway_target(
+            gatewayIdentifier=gateway_id, targetId=target["targetId"]
+        )
+        time.sleep(20)
+
+
+def safe_delete(func, **kwargs) -> bool:
+    """Call a boto3 delete method, swallowing "already gone" errors.
+
+    Args:
+        func: A bound boto3 client method to call (e.g. `agentcore_client.delete_gateway`).
+        **kwargs: Keyword arguments passed through to `func`.
+
+    Returns:
+        True if the call succeeded, False if it raised (including not-found errors,
+        which are treated as already-cleaned-up rather than failures).
+    """
+    try:
+        func(**kwargs)
+        return True
+    except Exception as error:
+        if "NotFound" not in str(error) and "NoSuchEntity" not in str(error):
+            print(f"Error during cleanup: {error}")
+        return False

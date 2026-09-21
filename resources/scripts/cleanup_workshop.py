@@ -2,9 +2,10 @@
 """Discover and tear down AWS resources created while running this workshop.
 
 Covers what nothing else in the repo cleans up automatically:
-  - The AgentCore CLI projects from notebooks 4/5 (RestaurantConciergeDemo,
-    RestaurantEventsSpecialistDemo) -- harness, memory, gateway, and their
-    underlying AgentCore-managed CDK stack.
+  - The AgentCore CLI projects from notebooks 4/5 (RestaurantConcierge,
+    RestaurantEvents) -- harness, memory, gateway, and their underlying
+    AgentCore-managed CDK stack. Checked both at the repo root and under
+    solutions/, since either notebook copy may have been the one actually run.
   - The CloudFormation stacks from notebooks 2 and 4 (and the legacy notebook 4,
     if you ran Bedrock Agents Classic) -- matched by the naming prefixes those
     notebooks actually use, since each run appends a random UUID.
@@ -39,8 +40,8 @@ STACK_PREFIXES = [
 ]
 
 AGENTCORE_PROJECTS = [
-    "RestaurantConciergeDemo",       # notebook 4
-    "RestaurantEventsSpecialistDemo",  # notebook 5
+    "RestaurantConcierge",  # notebook 4
+    "RestaurantEvents",     # notebook 5
 ]
 
 ACTIVE_STACK_STATUSES = [
@@ -69,9 +70,10 @@ def discover_stacks(cfn):
 def discover_agentcore_projects(repo_root: Path):
     found = []
     for name in AGENTCORE_PROJECTS:
-        project_dir = repo_root / name
-        if (project_dir / "agentcore").is_dir():
-            found.append(project_dir)
+        for base in (repo_root, repo_root / "solutions"):
+            project_dir = base / name
+            if (project_dir / "agentcore").is_dir():
+                found.append(project_dir)
     return found
 
 
