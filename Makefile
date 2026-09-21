@@ -1,5 +1,6 @@
 STUDIO_STACK_NAME ?= genai-workshop-studio
 STUDIO_REGION ?= us-east-1
+LCC_VERSION ?= v1
 
 .DEFAULT_GOAL := help
 .PHONY: help install lock env jupyter validate clean tree studio-init studio-update studio-url studio-destroy teardown teardown-dry-run
@@ -72,25 +73,22 @@ studio-init: ## Deploy a ready-to-go SageMaker Studio (JupyterLab) for this work
 	echo "Using VPC $$vpc_id, subnets $$subnet_ids"; \
 	if [ -n "$(SKIP_LIFECYCLE)" ]; then \
 		echo "SKIP_LIFECYCLE set -- not attaching a Lifecycle Configuration this deploy"; \
-		echo "(the LCC resource itself, if it already exists, is left untouched -- only this deploy omits the reference)."; \
+		echo "(the $(STUDIO_STACK_NAME)-lifecycle stack, if it already exists, is left untouched -- only this deploy omits the reference)."; \
 		lcc_arn=""; \
 	else \
-		lcc_name="$(STUDIO_STACK_NAME)-lifecycle"; \
-		lcc_arn=$$(aws sagemaker describe-studio-lifecycle-config --studio-lifecycle-config-name "$$lcc_name" \
-			--region $(STUDIO_REGION) --query 'StudioLifecycleConfigArn' --output text 2>/dev/null || true); \
-		if [ -z "$$lcc_arn" ] || [ "$$lcc_arn" = "None" ]; then \
-			echo "Creating Studio Lifecycle Configuration $$lcc_name (clones the repo + runs 'pip install -r requirements.txt', including the agentcore CLI, on space start)..."; \
-			lcc_b64=$$(base64 -w 0 resources/scripts/studio_lifecycle_config.sh 2>/dev/null || base64 resources/scripts/studio_lifecycle_config.sh | tr -d '\n'); \
-			lcc_arn=$$(aws sagemaker create-studio-lifecycle-config \
-				--studio-lifecycle-config-name "$$lcc_name" \
-				--studio-lifecycle-config-app-type JupyterLab \
-				--studio-lifecycle-config-content "$$lcc_b64" \
-				--region $(STUDIO_REGION) \
-				--query 'StudioLifecycleConfigArn' --output text); \
-		else \
-			echo "Reusing existing Studio Lifecycle Configuration $$lcc_name (content is immutable -- if you edited"; \
-			echo "resources/scripts/studio_lifecycle_config.sh, delete it first: aws sagemaker delete-studio-lifecycle-config --studio-lifecycle-config-name $$lcc_name --region $(STUDIO_REGION))"; \
-		fi; \
+		echo "Deploying $(STUDIO_STACK_NAME)-lifecycle (Studio Lifecycle Configuration $(LCC_VERSION): clones the repo + runs"; \
+		echo "'pip install -r requirements.txt', including the agentcore CLI, on space start)..."; \
+		lcc_b64=$$(base64 -w 0 resources/scripts/studio_lifecycle_config.sh 2>/dev/null || base64 resources/scripts/studio_lifecycle_config.sh | tr -d '\n'); \
+		aws cloudformation deploy \
+			--template-file resources/infra/sagemaker_studio_lifecycle_template.yaml \
+			--stack-name $(STUDIO_STACK_NAME)-lifecycle \
+			--region $(STUDIO_REGION) \
+			--no-fail-on-empty-changeset \
+			--parameter-overrides LifecycleConfigName=$(STUDIO_STACK_NAME)-lifecycle ScriptVersion=$(LCC_VERSION) "ScriptContentBase64=$$lcc_b64"; \
+		lcc_arn=$$(aws cloudformation describe-stacks --stack-name $(STUDIO_STACK_NAME)-lifecycle --region $(STUDIO_REGION) \
+			--query "Stacks[0].Outputs[?OutputKey=='LifecycleConfigArn'].OutputValue" --output text); \
+		echo "(edited resources/scripts/studio_lifecycle_config.sh? LCC content is immutable in the AWS API --"; \
+		echo "re-run with LCC_VERSION=v2 (or higher) to force a clean replacement instead of a failed in-place update.)"; \
 	fi; \
 	echo "LifecycleConfigArn: $${lcc_arn:-<none>}"; \
 	aws cloudformation deploy \
@@ -110,12 +108,12 @@ studio-url: ## Print the console URL and role ARN for the deployed Studio enviro
 
 studio-destroy: ## Tear down the SageMaker Studio environment (destructive -- confirms first)
 	@echo "This deletes the Studio domain/user/space/role in stack $(STUDIO_STACK_NAME) ($(STUDIO_REGION)),"
-	@echo "plus the $(STUDIO_STACK_NAME)-lifecycle Lifecycle Configuration (created outside CloudFormation)."
+	@echo "plus its $(STUDIO_STACK_NAME)-lifecycle Lifecycle Configuration stack."
 	@read -p "Type 'yes' to continue: " confirm; \
 	if [ "$$confirm" = "yes" ]; then \
 		aws cloudformation delete-stack --stack-name $(STUDIO_STACK_NAME) --region $(STUDIO_REGION); \
 		aws cloudformation wait stack-delete-complete --stack-name $(STUDIO_STACK_NAME) --region $(STUDIO_REGION) 2>/dev/null || true; \
-		aws sagemaker delete-studio-lifecycle-config --studio-lifecycle-config-name "$(STUDIO_STACK_NAME)-lifecycle" --region $(STUDIO_REGION) 2>/dev/null || true; \
+		aws cloudformation delete-stack --stack-name $(STUDIO_STACK_NAME)-lifecycle --region $(STUDIO_REGION); \
 		echo "Delete requested -- check the CloudFormation console for progress."; \
 	else \
 		echo "Aborted."; \

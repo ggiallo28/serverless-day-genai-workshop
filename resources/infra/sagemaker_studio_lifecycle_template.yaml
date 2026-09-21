@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Studio Lifecycle Configuration for the serverless-day-genai-workshop, kept in its own
+  stack rather than merged into sagemaker_studio_init_template.yaml: referencing a
+  brand-new Lifecycle Configuration ARN in the same changeset as the Domain/Space it's
+  attached to fails CloudFormation's validation, so the LCC must already exist (as a
+  completed, separate stack) before the Domain/Space stack deploys. `make studio-init`
+  deploys this stack first and feeds its output ARN into the main stack automatically.
+
+Parameters:
+  LifecycleConfigName:
+    Type: String
+    Default: genai-workshop-studio-lifecycle
+    Description: >
+      Base name for the Studio Lifecycle Configuration. The actual resource name also
+      includes ScriptVersion below, since LCC content is immutable in the AWS API --
+      bumping ScriptVersion after editing the script forces CloudFormation to create the
+      new version before deleting the old one, instead of failing on an in-place update.
+
+  ScriptVersion:
+    Type: String
+    Default: v1
+    Description: >
+      Bump this (v2, v3, ...) any time resources/scripts/studio_lifecycle_config.sh
+      changes. It's part of the LCC's physical resource name, which is how this template
+      forces a clean create-then-replace instead of an unsupported in-place content update.
+
+  ScriptContentBase64:
+    Type: String
+    Description: >
+      Base64-encoded content of resources/scripts/studio_lifecycle_config.sh. `make
+      studio-init` reads and encodes the file automatically. Deploying this template
+      directly: `base64 -w 0 resources/scripts/studio_lifecycle_config.sh`.
+
+Resources:
+  StudioLifecycleConfig:
+    Type: AWS::SageMaker::StudioLifecycleConfig
+    Properties:
+      StudioLifecycleConfigName: !Sub "${LifecycleConfigName}-${ScriptVersion}"
+      StudioLifecycleConfigAppType: JupyterLab
+      StudioLifecycleConfigContent: !Ref ScriptContentBase64
+
+Outputs:
+  LifecycleConfigArn:
+    Description: ARN of the Studio Lifecycle Configuration -- feed this into LifecycleConfigArn on sagemaker_studio_init_template.yaml
+    Value: !GetAtt StudioLifecycleConfig.StudioLifecycleConfigArn

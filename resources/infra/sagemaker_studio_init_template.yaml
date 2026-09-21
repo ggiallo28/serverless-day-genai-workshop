@@ -56,9 +56,11 @@ Parameters:
       ARN of a SageMaker Studio Lifecycle Configuration (JupyterLab app type) that clones
       this repo and installs its dependencies on space start. Leave blank to skip -- the
       Studio environment still works, you'd just `git clone`/`make install` by hand once.
-      `make studio-init` creates this LCC itself (outside CloudFormation, since a brand-new
-      LCC referenced in the same changeset as the Domain/Space fails CloudFormation's
-      early-validation property check) and passes its ARN in automatically.
+      `make studio-init` deploys sagemaker_studio_lifecycle_template.yaml as its own,
+      preceding CloudFormation stack (a brand-new LCC referenced in the same changeset as
+      the Domain/Space that uses it fails CloudFormation's validation, so it must already
+      exist as a completed stack first) and passes that stack's output ARN in here
+      automatically.
 
 Conditions:
   HasLifecycleConfig: !Not [!Equals [!Ref LifecycleConfigArn, ""]]
