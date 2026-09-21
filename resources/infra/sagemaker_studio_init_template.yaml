@@ -240,6 +240,15 @@ Resources:
                   - kms:*
                 Resource: "*"
 
+              # Notebook 6's MCP/Gateway CUSTOM_JWT auth flow provisions its own Cognito User
+              # Pool (client credentials for OAuth-secured tools) -- no Cognito permissions
+              # existed at all before this, causing CreateUserPool to fail outright.
+              - Sid: CognitoForMcpAuth
+                Effect: Allow
+                Action:
+                  - cognito-idp:*
+                Resource: "*"
+
               # Notebook 2 (KB data bucket), notebook 6 (skills upload to S3), and any
               # CFN-created buckets
               # Widened to s3:* (from an enumerated action list) after the CDK bootstrap
@@ -304,6 +313,15 @@ Resources:
                   - sagemaker:*
                 Resource: "*"
 
+  # Notebook 6's AgentCore Skills section uploads a SKILL.md here for the console's
+  # "Add skill -> S3 location" flow. No BucketName given on purpose -- CloudFormation
+  # generates a unique name, since S3 bucket names are globally unique across all AWS
+  # accounts and a fixed literal would collide across workshop attendees.
+  SkillsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+
   StudioDomain:
     Type: AWS::SageMaker::Domain
     Properties:
@@ -362,3 +380,6 @@ Outputs:
   StudioConsoleUrl:
     Description: Open this in the AWS Console to launch Studio, pick the user profile above, then click "Open"
     Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/sagemaker/home?region=${AWS::Region}#/studio/${StudioDomain}"
+  SkillsBucketName:
+    Description: S3 bucket for AgentCore Skills (notebook 6, Part 3)
+    Value: !Ref SkillsBucket
