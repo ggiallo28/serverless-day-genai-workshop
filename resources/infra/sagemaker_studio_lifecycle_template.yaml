@@ -7,6 +7,13 @@ Description: >
   completed, separate stack) before the Domain/Space stack deploys. `make studio-init`
   deploys this stack first and feeds its output ARN into the main stack automatically.
 
+  The script content below is embedded directly (base64-encoded via Fn::Base64, not passed
+  in as a parameter) so this template is fully self-contained -- deployable as-is from the
+  AWS Console or a bare `aws cloudformation deploy`, with no manual base64 step and no risk
+  of an empty/unset content parameter. It must be kept in sync by hand with
+  resources/scripts/studio_lifecycle_config.sh, which remains the readable source of truth
+  for what the script does; the copy here is what actually runs.
+
 Parameters:
   LifecycleConfigName:
     Type: String
@@ -21,16 +28,10 @@ Parameters:
     Type: String
     Default: v1
     Description: >
-      Bump this (v2, v3, ...) any time resources/scripts/studio_lifecycle_config.sh
-      changes. It's part of the LCC's physical resource name, which is how this template
-      forces a clean create-then-replace instead of an unsupported in-place content update.
-
-  ScriptContentBase64:
-    Type: String
-    Description: >
-      Base64-encoded content of resources/scripts/studio_lifecycle_config.sh. `make
-      studio-init` reads and encodes the file automatically. Deploying this template
-      directly: `base64 -w 0 resources/scripts/studio_lifecycle_config.sh`.
+      Bump this (v2, v3, ...) any time the embedded script content below changes (keep it
+      in sync with resources/scripts/studio_lifecycle_config.sh). It's part of the LCC's
+      physical resource name, which is how this template forces a clean create-then-replace
+      instead of an unsupported in-place content update.
 
 Resources:
   StudioLifecycleConfig:
@@ -38,7 +39,35 @@ Resources:
     Properties:
       StudioLifecycleConfigName: !Sub "${LifecycleConfigName}-${ScriptVersion}"
       StudioLifecycleConfigAppType: JupyterLab
-      StudioLifecycleConfigContent: !Ref ScriptContentBase64
+      StudioLifecycleConfigContent: !Base64 |
+        #!/bin/bash
+        # SageMaker Studio Lifecycle Configuration (JupyterLab app type).
+        # Runs automatically on space start: clones this repo and installs its dependencies
+        # (including bedrock-agentcore-starter-toolkit, which provides the `agentcore` CLI) so a
+        # fresh JupyterLab space is immediately ready to run the workshop notebooks.
+        #
+        # NOTE: JupyterLab lifecycle scripts have a 5-minute execution budget. Installing the full
+        # requirements.txt is the slowest step here -- if it ever times out, the fallback is just
+        # opening a terminal in Studio and running `make install` once by hand.
+        set -eux
+
+        LOG_FILE="/home/sagemaker-user/.workshop-lifecycle.log"
+        exec > >(tee -a "$LOG_FILE") 2>&1
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] workshop lifecycle script starting"
+
+        REPO_DIR="/home/sagemaker-user/serverless-day-genai-workshop"
+        REPO_URL="https://github.com/ggiallo28/serverless-day-genai-workshop.git"
+
+        if [ -d "$REPO_DIR/.git" ]; then
+          echo "$REPO_DIR already exists, skipping clone"
+        else
+          git clone "$REPO_URL" "$REPO_DIR"
+        fi
+
+        cd "$REPO_DIR"
+        pip install --no-build-isolation --force-reinstall -r requirements.txt
+
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] workshop lifecycle script done"
 
 Outputs:
   LifecycleConfigArn:

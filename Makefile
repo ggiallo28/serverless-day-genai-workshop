@@ -78,17 +78,23 @@ studio-init: ## Deploy a ready-to-go SageMaker Studio (JupyterLab) for this work
 	else \
 		echo "Deploying $(STUDIO_STACK_NAME)-lifecycle (Studio Lifecycle Configuration $(LCC_VERSION): clones the repo + runs"; \
 		echo "'pip install -r requirements.txt', including the agentcore CLI, on space start)..."; \
-		lcc_b64=$$(base64 -w 0 resources/scripts/studio_lifecycle_config.sh 2>/dev/null || base64 resources/scripts/studio_lifecycle_config.sh | tr -d '\n'); \
 		aws cloudformation deploy \
 			--template-file resources/infra/sagemaker_studio_lifecycle_template.yaml \
 			--stack-name $(STUDIO_STACK_NAME)-lifecycle \
 			--region $(STUDIO_REGION) \
 			--no-fail-on-empty-changeset \
-			--parameter-overrides LifecycleConfigName=$(STUDIO_STACK_NAME)-lifecycle ScriptVersion=$(LCC_VERSION) "ScriptContentBase64=$$lcc_b64"; \
+			--parameter-overrides LifecycleConfigName=$(STUDIO_STACK_NAME)-lifecycle ScriptVersion=$(LCC_VERSION); \
 		lcc_arn=$$(aws cloudformation describe-stacks --stack-name $(STUDIO_STACK_NAME)-lifecycle --region $(STUDIO_REGION) \
 			--query "Stacks[0].Outputs[?OutputKey=='LifecycleConfigArn'].OutputValue" --output text); \
-		echo "(edited resources/scripts/studio_lifecycle_config.sh? LCC content is immutable in the AWS API --"; \
-		echo "re-run with LCC_VERSION=v2 (or higher) to force a clean replacement instead of a failed in-place update.)"; \
+		if [ -z "$$lcc_arn" ] || [ "$$lcc_arn" = "None" ]; then \
+			echo "Could not read LifecycleConfigArn back from the $(STUDIO_STACK_NAME)-lifecycle stack --"; \
+			echo "check its status: aws cloudformation describe-stacks --stack-name $(STUDIO_STACK_NAME)-lifecycle --region $(STUDIO_REGION)"; \
+			exit 1; \
+		fi; \
+		echo "(edited resources/scripts/studio_lifecycle_config.sh? Keep it in sync with the embedded copy in"; \
+		echo "resources/infra/sagemaker_studio_lifecycle_template.yaml, then re-run with LCC_VERSION=v2 (or higher) --"; \
+		echo "LCC content is immutable in the AWS API, so bumping the version forces a clean replacement instead"; \
+		echo "of a failed in-place update.)"; \
 	fi; \
 	echo "LifecycleConfigArn: $${lcc_arn:-<none>}"; \
 	aws cloudformation deploy \
